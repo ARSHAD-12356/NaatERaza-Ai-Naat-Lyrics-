@@ -125,35 +125,43 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Strict Prompt Builder for target languages
+// Strict Prompt Builder requiring COMPLETE transcription from line 1
 function getPromptForLanguage(targetLanguage: string): string {
-  if (targetLanguage === 'en') {
-    return `Listen to this audio carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics into HINGLISH / ROMAN URDU using LATIN/ENGLISH ALPHABETS ONLY (A-Z, a-z).
+  const completenessRule = `
+CRITICAL FULL TRANSCRIPTION INSTRUCTIONS:
+1. START FROM THE VERY FIRST VERSE / INITIAL LINE OF THE AUDIO (Beginning of the Naat).
+2. DO NOT start from the middle. DO NOT omit the starting stanzas or chorus.
+3. Transcribe EVERY single verse and stanza from beginning to end completely.
+4. Output ONLY the line-by-line lyrics text. Do NOT add conversational headers, intros, or summaries.`
 
-CRITICAL SCRIPT RULE:
-- You MUST write in HINGLISH / ROMAN URDU (Latin alphabet only).
-- Example: "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon..."
-- DO NOT use Hindi Devanagari script (e.g. DO NOT WRITE 'हुज़ूर आ गए').
-- DO NOT use Urdu/Arabic script.
-- Output ONLY the line-by-line Hinglish lyrics text without any markdown or conversational header.`
+  if (targetLanguage === 'en') {
+    return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the ENTIRE audio from start to finish into HINGLISH / ROMAN URDU using LATIN/ENGLISH ALPHABETS ONLY (A-Z, a-z).
+
+${completenessRule}
+
+SCRIPT RULES FOR HINGLISH:
+- Write every word in Roman Urdu / Hinglish (e.g. "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon...").
+- DO NOT use Hindi Devanagari script. DO NOT use Arabic/Urdu script.`
   }
 
   if (targetLanguage === 'hi') {
-    return `Listen to this audio carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics into Devanagari Hindi script (हिंदी).
+    return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the ENTIRE audio from start to finish into complete Devanagari Hindi script (हिंदी).
 
-RULES:
-- Write in clean Devanagari Hindi script (e.g. "हुज़ूर आ गए हैं, फ़लक के नज़ारो...").
-- Output ONLY line-by-line lyrics text.`
+${completenessRule}
+
+SCRIPT RULES FOR HINDI:
+- Write in clean Devanagari Hindi script (e.g. "हुज़ूर आ गए हैं, फ़लक के नज़ारो...").`
   }
 
-  return `Listen to this audio carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics into Urdu script (اردو).
+  return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the ENTIRE audio from start to finish into complete Urdu script (اردو).
 
-RULES:
-- Write in clean Urdu script (e.g. "حضور آ گئے ہیں، فلک کے نظارو...").
-- Output ONLY line-by-line lyrics text.`
+${completenessRule}
+
+SCRIPT RULES FOR URDU:
+- Write in clean Urdu script (e.g. "حضور آ گئے ہیں، فلک کے نظارو...").`
 }
 
 // OpenRouter Multimodal Transcription
@@ -175,7 +183,8 @@ async function transcribeWithOpenRouter(apiKey: string, base64Audio: string, mim
         },
         body: JSON.stringify({
           model,
-          max_tokens: 2000,
+          temperature: 0.1,
+          max_tokens: 3500,
           messages: [
             {
               role: 'user',
@@ -225,7 +234,11 @@ async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeTyp
           { inlineData: { mimeType: mimeType || 'audio/mp3', data: base64Audio } },
           { text: prompt }
         ]
-      }]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 3500
+      }
     })
   })
 
@@ -256,15 +269,16 @@ async function transcribeWithOpenAI(apiKey: string, audioFile: File, targetLangu
   const transcriptData = await whisperRes.json()
 
   const prompt = targetLanguage === 'en'
-    ? `Transcribe this text into HINGLISH / ROMAN URDU using ONLY English Latin characters (A-Z). DO NOT use Devanagari (Hindi) or Urdu script. Output ONLY the Hinglish lyrics:\n\n${transcriptData.text}`
-    : `Format this audio transcription as faithful, line-by-line Naat lyrics in ${targetLanguage === 'hi' ? 'Devanagari Hindi' : 'Urdu script'}. Output ONLY the lyrics:\n\n${transcriptData.text}`
+    ? `Transcribe this text from start to finish into HINGLISH / ROMAN URDU using ONLY English Latin characters (A-Z). DO NOT skip starting lines. Output ONLY the complete Hinglish lyrics:\n\n${transcriptData.text}`
+    : `Format this audio transcription as faithful, complete line-by-line Naat lyrics from start to finish in ${targetLanguage === 'hi' ? 'Devanagari Hindi' : 'Urdu script'}. Output ONLY the lyrics:\n\n${transcriptData.text}`
 
   const completionRes = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      temperature: 0.2,
+      temperature: 0.1,
+      max_tokens: 3500,
       messages: [{ role: 'user', content: prompt }]
     })
   })
@@ -371,7 +385,6 @@ function convertDevanagariToHinglish(text: string): string {
     }
   }
   
-  // Clean up repeated spaces or common romanization fixes
   return result
     .replace(/aa+/gi, 'aa')
     .replace(/ee+/gi, 'ee')
