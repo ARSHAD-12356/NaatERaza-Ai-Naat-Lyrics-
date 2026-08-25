@@ -41,92 +41,67 @@ export async function POST(request: NextRequest) {
     const base64Audio = buffer.toString('base64')
     const mimeType = audio.type || 'audio/mp3'
 
-    // STAGE 1: Get Master 100% Full-Length Audio Transcription in Urdu Script (Native Audio Model Strength)
-    let masterUrduLyrics = ''
+    let lyrics = ''
 
+    // 1. Try OpenRouter (Max tokens = 1500 to guarantee HTTP 200 OK on OpenRouter)
     if (openrouterKey || (genericUserKey && genericUserKey.startsWith('sk-or-'))) {
       const keyToUse = openrouterKey || genericUserKey
       try {
-        masterUrduLyrics = await transcribeAudioToMasterUrduWithOpenRouter(keyToUse, base64Audio, mimeType)
+        lyrics = await transcribeWithOpenRouter(keyToUse, base64Audio, mimeType, targetLanguage)
       } catch (err) {
-        console.warn('OpenRouter master transcription failed, trying fallback...', err)
+        console.warn('OpenRouter transcription failed, trying next provider...', err)
       }
     }
 
-    if (!masterUrduLyrics && (geminiKey || (genericUserKey && genericUserKey.startsWith('AIza')))) {
+    // 2. Try Google Gemini Direct if no lyrics yet
+    if (!lyrics && (geminiKey || (genericUserKey && genericUserKey.startsWith('AIza')))) {
       const keyToUse = geminiKey || genericUserKey
       try {
-        masterUrduLyrics = await transcribeAudioToMasterUrduWithGemini(keyToUse, base64Audio, mimeType)
+        lyrics = await transcribeWithGemini(keyToUse, base64Audio, mimeType, targetLanguage)
       } catch (err) {
-        console.warn('Gemini master transcription failed, trying fallback...', err)
+        console.warn('Gemini transcription failed, trying next provider...', err)
       }
     }
 
-    if (!masterUrduLyrics && (openaiKey || (genericUserKey && genericUserKey.startsWith('sk-')))) {
+    // 3. Try OpenAI Whisper if no lyrics yet
+    if (!lyrics && (openaiKey || (genericUserKey && genericUserKey.startsWith('sk-')))) {
       const keyToUse = openaiKey || genericUserKey
       try {
-        masterUrduLyrics = await transcribeAudioToMasterUrduWithOpenAI(keyToUse, audio)
+        lyrics = await transcribeWithOpenAI(keyToUse, audio, targetLanguage)
       } catch (err) {
-        console.warn('OpenAI master transcription failed...', err)
+        console.warn('OpenAI transcription failed...', err)
       }
     }
 
-    if (!masterUrduLyrics && (groqKey || (genericUserKey && genericUserKey.startsWith('gsk_')))) {
+    // 4. Try Groq Whisper if no lyrics yet
+    if (!lyrics && (groqKey || (genericUserKey && genericUserKey.startsWith('gsk_')))) {
       const keyToUse = groqKey || genericUserKey
       try {
-        masterUrduLyrics = await transcribeWithGroq(keyToUse, audio)
+        lyrics = await transcribeWithGroq(keyToUse, audio, targetLanguage)
       } catch (err) {
-        console.warn('Groq master transcription failed...', err)
+        console.warn('Groq transcription failed...', err)
       }
     }
 
-    if (!masterUrduLyrics && genericUserKey) {
+    // 5. Try generic key fallback
+    if (!lyrics && genericUserKey) {
       try {
-        masterUrduLyrics = await transcribeAudioToMasterUrduWithOpenRouter(genericUserKey, base64Audio, mimeType)
+        lyrics = await transcribeWithOpenRouter(genericUserKey, base64Audio, mimeType, targetLanguage)
       } catch {
         try {
-          masterUrduLyrics = await transcribeAudioToMasterUrduWithGemini(genericUserKey, base64Audio, mimeType)
+          lyrics = await transcribeWithGemini(genericUserKey, base64Audio, mimeType, targetLanguage)
         } catch {}
       }
     }
 
-    // Fallback if audio AI failed or no key
-    if (!masterUrduLyrics) {
-      masterUrduLyrics = generateSmartNaatLyricsFallback(audio.name, 'ur')
+    // 6. Clean Smart Fallback if API keys failed or offline
+    if (!lyrics) {
+      lyrics = generateSmartNaatLyricsFallback(audio.name, targetLanguage)
     }
 
-    // STAGE 2: Transliterate Master Urdu Lyrics into Selected Target Language (100% Line for Line)
-    let finalLyrics = masterUrduLyrics
-    const activeApiKey = openrouterKey || genericUserKey || geminiKey || openaiKey
-
-    if (targetLanguage === 'en') {
-      if (activeApiKey) {
-        try {
-          finalLyrics = await convertUrduTextToTargetLanguage(activeApiKey, masterUrduLyrics, 'en')
-        } catch {
-          finalLyrics = convertUrduScriptToRomanUrdu(masterUrduLyrics)
-        }
-      } else {
-        finalLyrics = convertUrduScriptToRomanUrdu(masterUrduLyrics)
-      }
-
-      // ABSOLUTE GUARANTEE: Never return Urdu/Hindi script when English is selected!
-      if (/[\u0600-\u06FF]/.test(finalLyrics)) {
-        finalLyrics = convertUrduScriptToRomanUrdu(finalLyrics)
-      }
-      if (/[\u0900-\u097F]/.test(finalLyrics)) {
-        finalLyrics = convertDevanagariToHinglish(finalLyrics)
-      }
-    } else if (targetLanguage === 'hi') {
-      if (activeApiKey) {
-        try {
-          finalLyrics = await convertUrduTextToTargetLanguage(activeApiKey, masterUrduLyrics, 'hi')
-        } catch {
-          finalLyrics = generateSmartNaatLyricsFallback(audio.name, 'hi')
-        }
-      } else {
-        finalLyrics = generateSmartNaatLyricsFallback(audio.name, 'hi')
-      }
+    // Post-Processing Safeguard: If targetLanguage is 'en' and Devanagari script is present, clean to Hinglish
+    if (targetLanguage === 'en' && /[\u0900-\u097F]/.test(lyrics)) {
+      lyrics = convertDevanagariToHinglish(lyrics)
     }
 
     return NextResponse.json({
@@ -134,7 +109,7 @@ export async function POST(request: NextRequest) {
       source_language: 'auto',
       target_language: targetLanguage,
       target_format: targetLanguage === 'en' ? 'hinglish' : targetLanguage === 'hi' ? 'hindi' : 'urdu',
-      lyrics: finalLyrics,
+      lyrics,
       is_complete: true
     })
 
@@ -147,15 +122,42 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Stage 1 Master Audio Transcription into Urdu Script
-async function transcribeAudioToMasterUrduWithOpenRouter(apiKey: string, base64Audio: string, mimeType: string): Promise<string> {
-  const prompt = `Listen to this audio file carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics from start to finish into Urdu script (اردو).
+// Build Prompt for Audio Transcription
+function getPromptForAudio(targetLanguage: string): string {
+  if (targetLanguage === 'en') {
+    return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end into HINGLISH / ROMAN URDU using ONLY LATIN/ENGLISH ALPHABETS (A-Z, a-z).
 
-CRITICAL FULL TRANSCRIPTION RULES:
-1. START FROM THE VERY FIRST VERSE / INITIAL LINE OF THE AUDIO (Beginning of the Naat).
-2. Transcribe EVERY single verse, stanza, refrain, and chorus from start to end completely. Do NOT skip any lines.
-3. Output ONLY the line-by-line Urdu lyrics text. No markdown or conversational header.`
+RULES:
+1. START FROM THE VERY FIRST LINE OF THE NAAT (e.g. "Huzoor Aa Gaye Hain..."). Do NOT skip the starting verse.
+2. Transcribe EVERY single line and stanza in order.
+3. Use clean Roman Urdu / Hinglish (e.g. "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon...").
+4. DO NOT use Devanagari Hindi or Arabic/Urdu script.
+5. Output ONLY the line-by-line Hinglish lyrics text.`
+  }
+
+  if (targetLanguage === 'hi') {
+    return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end in complete Devanagari Hindi script (हिंदी).
+
+RULES:
+1. START FROM THE VERY FIRST LINE OF THE NAAT (e.g. "हुज़ूर आ गए हैं..."). Do NOT skip the starting verse.
+2. Transcribe EVERY single line and stanza in order.
+3. Output ONLY line-by-line Devanagari Hindi lyrics text.`
+  }
+
+  return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
+Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end in complete Urdu script (اردو).
+
+RULES:
+1. START FROM THE VERY FIRST LINE OF THE NAAT (e.g. "حضور آ گئے ہیں..."). Do NOT skip the starting verse.
+2. Transcribe EVERY single line and stanza in order.
+3. Output ONLY line-by-line Urdu lyrics text.`
+}
+
+// OpenRouter Multimodal Transcription (max_tokens: 1500 ensures HTTP 200 OK)
+async function transcribeWithOpenRouter(apiKey: string, base64Audio: string, mimeType: string, targetLanguage: string): Promise<string> {
+  const prompt = getPromptForAudio(targetLanguage)
 
   const models = ['google/gemini-2.5-flash', 'google/gemini-2.0-flash-001', 'google/gemini-flash-1.5']
   let lastError: any = null
@@ -172,8 +174,7 @@ CRITICAL FULL TRANSCRIPTION RULES:
         },
         body: JSON.stringify({
           model,
-          temperature: 0.1,
-          max_tokens: 3500,
+          max_tokens: 1500,
           messages: [
             {
               role: 'user',
@@ -193,8 +194,8 @@ CRITICAL FULL TRANSCRIPTION RULES:
 
       if (!response.ok) {
         const errorMsg = await response.text()
-        console.warn(`OpenRouter master model ${model} failed: ${response.status} - ${errorMsg}`)
-        lastError = new Error(`OpenRouter API status ${response.status}: ${errorMsg}`)
+        console.warn(`OpenRouter model ${model} failed with status ${response.status}: ${errorMsg}`)
+        lastError = new Error(`OpenRouter status ${response.status}`)
         continue
       }
 
@@ -206,18 +207,12 @@ CRITICAL FULL TRANSCRIPTION RULES:
     }
   }
 
-  throw lastError || new Error('Empty master response from OpenRouter')
+  throw lastError || new Error('Empty response from OpenRouter')
 }
 
-// Stage 1 Master Audio Transcription with Google Gemini
-async function transcribeAudioToMasterUrduWithGemini(apiKey: string, base64Audio: string, mimeType: string): Promise<string> {
-  const prompt = `Listen to this audio file carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics from start to finish into Urdu script (اردو).
-
-CRITICAL FULL TRANSCRIPTION RULES:
-1. START FROM THE VERY FIRST VERSE / INITIAL LINE OF THE AUDIO (Beginning of the Naat).
-2. Transcribe EVERY single verse, stanza, refrain, and chorus from start to end completely. Do NOT skip any lines.
-3. Output ONLY the line-by-line Urdu lyrics text.`
+// Google Gemini Direct Audio Transcription
+async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeType: string, targetLanguage: string): Promise<string> {
+  const prompt = getPromptForAudio(targetLanguage)
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
   const response = await fetch(url, {
@@ -231,15 +226,14 @@ CRITICAL FULL TRANSCRIPTION RULES:
         ]
       }],
       generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 3500
+        maxOutputTokens: 1500
       }
     })
   })
 
   if (!response.ok) {
     const errorMsg = await response.text()
-    throw new Error(`Gemini API status ${response.status}: ${errorMsg}`)
+    throw new Error(`Gemini status ${response.status}: ${errorMsg}`)
   }
 
   const data = await response.json()
@@ -248,8 +242,8 @@ CRITICAL FULL TRANSCRIPTION RULES:
   return content
 }
 
-// Stage 1 Master Audio Transcription with OpenAI
-async function transcribeAudioToMasterUrduWithOpenAI(apiKey: string, audioFile: File): Promise<string> {
+// OpenAI Whisper + GPT Formatting
+async function transcribeWithOpenAI(apiKey: string, audioFile: File, targetLanguage: string): Promise<string> {
   const upload = new FormData()
   upload.append('file', audioFile, audioFile.name.replace(/[^a-zA-Z0-9._-]/g, '_'))
   upload.append('model', 'whisper-1')
@@ -263,15 +257,16 @@ async function transcribeAudioToMasterUrduWithOpenAI(apiKey: string, audioFile: 
   if (!whisperRes.ok) throw new Error('OpenAI Whisper transcription failed')
   const transcriptData = await whisperRes.json()
 
-  const prompt = `Format this audio transcription into complete, full-length line-by-line Naat lyrics in Urdu script (اردو). Output ONLY the Urdu lyrics:\n\n${transcriptData.text}`
+  const prompt = targetLanguage === 'en'
+    ? `Format this transcription into HINGLISH / ROMAN URDU using ONLY English Latin characters (A-Z). Start from line 1. Output ONLY Hinglish lyrics:\n\n${transcriptData.text}`
+    : `Format this transcription into line-by-line Naat lyrics in ${targetLanguage === 'hi' ? 'Devanagari Hindi' : 'Urdu script'}. Output ONLY lyrics:\n\n${transcriptData.text}`
 
   const completionRes = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      temperature: 0.1,
-      max_tokens: 3500,
+      max_tokens: 1500,
       messages: [{ role: 'user', content: prompt }]
     })
   })
@@ -279,66 +274,6 @@ async function transcribeAudioToMasterUrduWithOpenAI(apiKey: string, audioFile: 
   if (!completionRes.ok) return transcriptData.text
   const completionData = await completionRes.json()
   return completionData.choices?.[0]?.message?.content?.trim() || transcriptData.text
-}
-
-// Stage 2: Transliterate Master Urdu Lyrics into Target Language (Hinglish or Hindi)
-async function convertUrduTextToTargetLanguage(apiKey: string, urduLyrics: string, targetLanguage: string): Promise<string> {
-  const isEnglish = targetLanguage === 'en'
-  const prompt = isEnglish
-    ? `You are a master transliterator. Transliterate these COMPLETE Urdu Naat lyrics faithfully into HINGLISH / ROMAN URDU using ONLY LATIN/ENGLISH ALPHABETS (A-Z, a-z).
-
-CRITICAL ACCURACY RULES:
-1. Transliterate EVERY SINGLE LINE from the very first verse to the end in exact order. DO NOT skip or shorten any stanza.
-2. Write in clean Roman Urdu / Hinglish (e.g. "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon...").
-3. DO NOT use Devanagari (Hindi) script or Arabic/Urdu script. Use ONLY English letters A-Z.
-4. Output ONLY the line-by-line Hinglish lyrics text.\n\nCOMPLETE URDU LYRICS:\n${urduLyrics}`
-    : `You are a master transliterator. Transliterate these COMPLETE Urdu Naat lyrics faithfully into Devanagari Hindi script (हिंदी).
-
-CRITICAL ACCURACY RULES:
-1. Transliterate EVERY SINGLE LINE from the very first verse to the end in exact order. DO NOT skip or shorten any stanza.
-2. Write in clean Devanagari Hindi script (e.g. "हुज़ूर आ गए हैं, फ़लक के नज़ारो...").
-3. Output ONLY the line-by-line Hindi lyrics text.\n\nCOMPLETE URDU LYRICS:\n${urduLyrics}`
-
-  const isGeminiDirect = apiKey.startsWith('AIza')
-  const models = isGeminiDirect ? ['gemini-2.5-flash'] : ['google/gemini-2.5-flash', 'google/gemini-2.0-flash-001', 'google/gemini-flash-1.5']
-
-  for (const model of models) {
-    try {
-      const url = isGeminiDirect
-        ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
-        : 'https://openrouter.ai/api/v1/chat/completions'
-
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (!isGeminiDirect) {
-        headers['Authorization'] = `Bearer ${apiKey}`
-        headers['HTTP-Referer'] = 'https://naateraza.app'
-        headers['X-Title'] = 'NaatERaza AI Lyrics'
-      }
-
-      const body = isGeminiDirect
-        ? JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-        : JSON.stringify({
-            model,
-            temperature: 0,
-            max_tokens: 3500,
-            messages: [{ role: 'user', content: prompt }]
-          })
-
-      const response = await fetch(url, { method: 'POST', headers, body })
-      if (response.ok) {
-        const data = await response.json()
-        const text = isGeminiDirect
-          ? data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
-          : data.choices?.[0]?.message?.content?.trim()
-        if (text) return text
-      }
-    } catch (err) {
-      console.warn(`Stage 2 conversion failed with model ${model}:`, err)
-    }
-  }
-
-  // Guaranteed fallback for English: Convert Urdu script directly to Roman Urdu!
-  return isEnglish ? convertUrduScriptToRomanUrdu(urduLyrics) : urduLyrics
 }
 
 // Groq Whisper Transcription
@@ -358,7 +293,7 @@ async function transcribeWithGroq(apiKey: string, audioFile: File): Promise<stri
   return data.text || ''
 }
 
-// Smart Naat Lyrics Generator (Fallback when API key is missing or offline)
+// Clean Human-Readable Naat Lyrics Generator (Fallback when API key is missing or offline)
 function generateSmartNaatLyricsFallback(fileName: string, targetLanguage: string): string {
   const cleanName = fileName.replace(/\.[^/.]+$/, '').replace(/[_+]/g, ' ')
   
@@ -408,38 +343,6 @@ Durood Un Pe Bhejo, Salaam Un Pe Bhejo
 Shafi-e-Mahshar, Huzoor Aa Gaye Hain.
 
 (${cleanName})`
-}
-
-// Direct Urdu Script -> Roman Urdu / Hinglish Transliteration Engine
-function convertUrduScriptToRomanUrdu(text: string): string {
-  const map: Record<string, string> = {
-    'ا': 'a', 'آ': 'aa', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's',
-    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ڈ': 'd', 'ذ': 'z',
-    'ر': 'r', 'ڑ': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's',
-    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
-    'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n', 'و': 'o',
-    'ہ': 'h', 'ھ': 'h', 'ء': '', 'ی': 'i', 'ے': 'e', 'ِ': 'i', 'ُ': 'u', 'َ': 'a',
-    'ٰ': 'a', 'ً': 'an'
-  }
-
-  let result = ''
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i]
-    if (map[char] !== undefined) {
-      result += map[char]
-    } else {
-      result += char
-    }
-  }
-
-  return result
-    .split('\n')
-    .map(line => {
-      const trimmed = line.trim()
-      if (!trimmed) return ''
-      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
-    })
-    .join('\n')
 }
 
 // Devanagari Hindi -> Hinglish (Roman Urdu) Converter Utility
