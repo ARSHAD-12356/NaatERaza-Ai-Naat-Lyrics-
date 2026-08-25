@@ -217,6 +217,7 @@ export default function Page() {
       return
     }
     setFile(next)
+    setLyrics('')
     setStatus('idle')
     setProgress(0)
     setPlaying(false)
