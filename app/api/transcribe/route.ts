@@ -29,13 +29,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unsupported audio format.' }, { status: 415 })
     }
 
-    // Determine API keys in priority: User provided > Gemini > OpenAI > Groq > OpenRouter
-    const geminiKey = (userProvider === 'gemini' && userApiKey) ? userApiKey : process.env.GEMINI_API_KEY || (userApiKey.startsWith('AIza') ? userApiKey : '')
-    const openrouterKey = (userProvider === 'openrouter' && userApiKey) ? userApiKey : process.env.OPENROUTER_API_KEY || (userApiKey.startsWith('sk-or-') ? userApiKey : '')
-    const openaiKey = (userProvider === 'openai' && userApiKey) ? userApiKey : process.env.OPENAI_API_KEY || (userApiKey.startsWith('sk-') && !userApiKey.startsWith('sk-or-') ? userApiKey : '')
-    const groqKey = (userProvider === 'groq' && userApiKey) ? userApiKey : process.env.GROQ_API_KEY || (userApiKey.startsWith('gsk_') ? userApiKey : '')
-    
-    const genericUserKey = userApiKey && !openrouterKey && !geminiKey && !openaiKey && !groqKey ? userApiKey : ''
+    // Determine API keys in priority: Gemini (direct) > OpenRouter > OpenAI > Groq
+    const geminiKey = process.env.GEMINI_API_KEY || userApiKey || ''
+    const openrouterKey = process.env.OPENROUTER_API_KEY || (userApiKey.startsWith('sk-or-') ? userApiKey : '')
+    const openaiKey = process.env.OPENAI_API_KEY || (userApiKey.startsWith('sk-') && !userApiKey.startsWith('sk-or-') ? userApiKey : '')
+    const groqKey = process.env.GROQ_API_KEY || (userApiKey.startsWith('gsk_') ? userApiKey : '')
 
     const buffer = Buffer.from(await audio.arrayBuffer())
     const base64Audio = buffer.toString('base64')
@@ -43,43 +41,39 @@ export async function POST(request: NextRequest) {
 
     let lyrics = ''
 
-    // 1. Try Google Gemini Direct if API key available (Free audio modal API)
-    if (geminiKey || (genericUserKey && genericUserKey.startsWith('AIza'))) {
-      const keyToUse = geminiKey || genericUserKey
+    // 1. Try Google Gemini Direct with gemini-3.6-flash (Primary Live Audio Model)
+    if (geminiKey) {
       try {
-        lyrics = await transcribeWithGemini(keyToUse, base64Audio, mimeType, targetLanguage)
+        lyrics = await transcribeWithGemini(geminiKey, base64Audio, mimeType, targetLanguage)
       } catch (err) {
-        console.warn('Gemini direct transcription failed:', err)
+        console.warn('Gemini direct transcription failed, trying fallback providers...', err)
       }
     }
 
-    // 2. Try OpenAI Whisper if key available
-    if (!lyrics && (openaiKey || (genericUserKey && genericUserKey.startsWith('sk-') && !genericUserKey.startsWith('sk-or-')))) {
-      const keyToUse = openaiKey || genericUserKey
+    // 2. Try OpenRouter if Gemini failed or key missing
+    if (!lyrics && openrouterKey) {
       try {
-        lyrics = await transcribeWithOpenAI(keyToUse, audio, targetLanguage)
+        lyrics = await transcribeWithOpenRouter(openrouterKey, base64Audio, mimeType, targetLanguage)
+      } catch (err) {
+        console.warn('OpenRouter audio transcription skipped or failed:', err)
+      }
+    }
+
+    // 3. Try OpenAI Whisper if key available
+    if (!lyrics && openaiKey) {
+      try {
+        lyrics = await transcribeWithOpenAI(openaiKey, audio, targetLanguage)
       } catch (err) {
         console.warn('OpenAI transcription failed:', err)
       }
     }
 
-    // 3. Try Groq Whisper if key available
-    if (!lyrics && (groqKey || (genericUserKey && genericUserKey.startsWith('gsk_')))) {
-      const keyToUse = groqKey || genericUserKey
+    // 4. Try Groq Whisper if key available
+    if (!lyrics && groqKey) {
       try {
-        lyrics = await transcribeWithGroq(keyToUse, audio)
+        lyrics = await transcribeWithGroq(groqKey, audio)
       } catch (err) {
         console.warn('Groq transcription failed:', err)
-      }
-    }
-
-    // 4. Try OpenRouter (Note: OpenRouter requires > $0.50 account balance for audio modal inputs)
-    if (!lyrics && (openrouterKey || (genericUserKey && genericUserKey.startsWith('sk-or-')))) {
-      const keyToUse = openrouterKey || genericUserKey
-      try {
-        lyrics = await transcribeWithOpenRouter(keyToUse, base64Audio, mimeType, targetLanguage)
-      } catch (err) {
-        console.warn('OpenRouter audio transcription skipped or failed:', err)
       }
     }
 
@@ -145,36 +139,46 @@ RULES:
 3. Output ONLY line-by-line Urdu lyrics text.`
 }
 
-// Google Gemini Direct Audio Transcription
+// Google Gemini Direct Audio Transcription (gemini-3.6-flash supported)
 async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeType: string, targetLanguage: string): Promise<string> {
   const prompt = getPromptForAudio(targetLanguage)
+  const models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { inlineData: { mimeType: mimeType || 'audio/mp3', data: base64Audio } },
-          { text: prompt }
-        ]
-      }],
-      generationConfig: {
-        maxOutputTokens: 2500
+  let lastErr: any = null
+  for (const model of models) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inlineData: { mimeType: mimeType || 'audio/mp3', data: base64Audio } },
+              { text: prompt }
+            ]
+          }],
+          generationConfig: {
+            maxOutputTokens: 2500
+          }
+        })
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+        const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+        if (content) return content
+      } else {
+        const errText = await response.text()
+        console.warn(`Gemini model ${model} failed with status ${response.status}: ${errText}`)
+        lastErr = new Error(`Gemini status ${response.status}`)
       }
-    })
-  })
-
-  if (!response.ok) {
-    const errorMsg = await response.text()
-    throw new Error(`Gemini status ${response.status}: ${errorMsg}`)
+    } catch (e) {
+      lastErr = e
+    }
   }
 
-  const data = await response.json()
-  const content = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
-  if (!content) throw new Error('Empty response from Gemini')
-  return content
+  throw lastErr || new Error('Empty response from Gemini Direct')
 }
 
 // OpenRouter Multimodal Transcription
@@ -340,8 +344,8 @@ Shafi-e-Mahshar, Huzoor Aa Gaye Hain.`
 کریں گے کرم جب وہ شاہِ مدینہ
 مٹے گا اندھیرا مرے ہر غم کا
 
-نبی کی محبت ہے سرمایۂ جاں
 نہیں خوف مجھ کو محشر کے دن کا
+نبی کی محبت ہے سرمایۂ جاں
 
 صلوا علیہ و آلہِ وسلم
 عطا ہے یہ رب کی، کرم ہے خدا کا`,
@@ -351,8 +355,8 @@ Shafi-e-Mahshar, Huzoor Aa Gaye Hain.`
 करेंगे करम जब वो शाह-ए-मदीना
 मिटेगा अँधेरा मेरे हर ग़म का।
 
-नबी की मोहब्बत है सरमाय-ए-जाँ
-नहीं ख़ौफ़ मुझको महशर के दिन का।
+नहीं ख़ौफ़ मुझको महशर के दिन का
+नबी की मोहब्बत है सरमाय-ए-जाँ।
 
 सल्लू अलैहि व आलिही वसल्लम
 अता है ये रब की, करम है ख़ुदा का।`,
@@ -362,8 +366,8 @@ Mere Lab Pe Naara Hai Salli Ala Ka.
 Kareinge Karam Jab Wo Shah-e-Madina
 Mitega Andhera Mere Har Gham Ka.
 
-Nabi Ki Mohabbat Hai Sarmay-e-Jaan
-Nahin Khauf Mujhko Mahshar Ke Din Ka.
+Nahin Khauf Mujhko Mahshar Ke Din Ka
+Nabi Ki Mohabbat Hai Sarmay-e-Jaan.
 
 Sallu Alaihi Wa Aalihi Wasallam
 Ata Hai Ye Rab Ki, Karam Hai Khuda Ka.`
@@ -453,7 +457,7 @@ Chashm-e-Tar Se Karein Hum Tawaf-e-Haram.`
 
 دینِ اسلام کا ہے یہ پیغام، پھیلاؤ دنیا میں محبت کا سلام
 ہر زبان پہ جاری رہے یہ کلام، لا الٰہ الا اللہ`,
-    hi: `हस्بی रब्बी जल्लल्लाह, मा फ़ी क़ल्بی ग़ैरुल्लाह
+    hi: `हस्बी रब्بی जल्लल्लाह, मा फ़ी क़ल्बी ग़ैरुल्लाह
 नूर-ए-मोहम्मद सल्लल्लाह, ला इलाहा इल्लल्लाह।
 
 वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुدرت बे-इंतहा
@@ -518,7 +522,7 @@ Ata Keejiye Ab Madine Ki Bheek, Khade Hain Gadagar Tumhaare Liye.`
 बरसता नहीं देख कर अब्र-ए-रहमत
 बदों पर भी बरसा दे बरसाने वाले।
 
-तू ज़िंदा है वल्लाह तू ज़िंदा है वल्लाह
+तू ज़िंदा है वल्लाह तू ज़िंदा ہے वल्लाह
 मेरे चश्म-ए-आलम से छुप जाने वाले।
 
 तेरी रहमतों का सदा है सहारा
