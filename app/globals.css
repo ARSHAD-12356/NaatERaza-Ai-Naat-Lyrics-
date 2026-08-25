@@ -143,7 +143,7 @@ button { cursor: pointer; touch-action: manipulation; }
 
 .pattern { position:absolute; inset:0; pointer-events:none; opacity:.25; background-image: linear-gradient(30deg, transparent 49%, var(--border) 50%, transparent 51%), linear-gradient(150deg, transparent 49%, var(--border) 50%, transparent 51%); background-size: 72px 72px; mask-image: linear-gradient(to bottom, #000, transparent 32%); }
 
-.topbar, .workspace, footer { position:relative; z-index:1; width:min(100% - 32px, 860px); margin:auto; }
+.topbar, .workspace, footer { position:relative; z-index:5; width:min(100% - 32px, 860px); margin:auto; }
 
 .topbar { display:flex; justify-content:space-between; align-items:center; padding:24px 0; }
 
@@ -165,6 +165,8 @@ button { cursor: pointer; touch-action: manipulation; }
   padding:0;
   line-height:1;
   flex-shrink:0;
+  touch-action:manipulation;
+  -webkit-tap-highlight-color:transparent;
 }
 
 .brand-moon-btn:hover {
@@ -184,26 +186,27 @@ button { cursor: pointer; touch-action: manipulation; }
   transform:scale(1.12) rotate(20deg);
 }
 
-.brand-title-btn { border:0; background:none; color:var(--foreground); text-align:left; padding:0; cursor:pointer; }
+.brand-title-btn { border:0; background:none; color:var(--foreground); text-align:left; padding:0; cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
 .brand-title-btn strong,.brand-title-btn small { display:block; }
 .brand-title-btn strong { font:600 24px/1 var(--font-serif); letter-spacing:-.03em; }
 .brand-title-btn small { margin-top:3px; color:var(--muted); font-size:9px; letter-spacing:.14em; text-transform:uppercase; }
 
-.topbar-actions { display:flex; align-items:center; gap:10px; }
+.topbar-actions { display:flex; align-items:center; gap:10px; z-index:10; }
 
-.hamburger-btn { display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:10px; padding:8px 14px; background:var(--surface); color:var(--foreground); font-size:13px; font-weight:600; transition:all .2s ease; box-shadow:0 2px 8px var(--shadow); }
-.hamburger-btn:hover { border-color:var(--primary); color:var(--primary); }
-.hamburger-icon { display:flex; flex-direction:column; gap:3px; width:16px; }
-.hamburger-icon span { height:2px; background:currentColor; border-radius:2px; transition:.2s; }
+.hamburger-btn { display:flex; align-items:center; gap:8px; border:1px solid var(--border); border-radius:10px; padding:8px 14px; background:var(--surface); color:var(--foreground); font-size:13px; font-weight:600; transition:all .2s ease; box-shadow:0 2px 8px var(--shadow); cursor:pointer; touch-action:manipulation; -webkit-tap-highlight-color:transparent; user-select:none; }
+.hamburger-btn:hover, .hamburger-btn:active { border-color:var(--primary); color:var(--primary); }
+.hamburger-icon { display:flex; flex-direction:column; gap:3px; width:16px; pointer-events:none; }
+.hamburger-icon span { height:2px; background:currentColor; border-radius:2px; transition:.2s; pointer-events:none; }
+.hamburger-btn span { pointer-events:none; }
 
 /* Slide-over Settings Drawer */
-.drawer-backdrop { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,0.45); backdrop-filter:blur(4px); animation:fadeIn .2s ease; }
-.drawer-panel { position:fixed; top:0; right:0; bottom:0; z-index:101; width:min(88vw, 340px); background:var(--surface); color:var(--foreground); border-left:1px solid var(--border); padding:24px 20px; display:flex; flex-direction:column; overflow-y:auto; box-shadow:-12px 0 40px rgba(0,0,0,0.2); animation:slideInRight .25s cubic-bezier(0.16, 1, 0.3, 1); }
+.drawer-backdrop { position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.55); backdrop-filter:blur(6px); animation:fadeIn .2s ease; touch-action:manipulation; }
+.drawer-panel { position:fixed; top:0; right:0; bottom:0; z-index:10000; width:min(88vw, 340px); background:var(--surface); color:var(--foreground); border-left:1px solid var(--border); padding:24px 20px; display:flex; flex-direction:column; overflow-y:auto; box-shadow:-12px 0 40px rgba(0,0,0,0.3); animation:slideInRight .25s cubic-bezier(0.16, 1, 0.3, 1); -webkit-overflow-scrolling:touch; }
 .drawer-panel[dir="rtl"] { right:auto; left:0; border-left:0; border-right:1px solid var(--border); animation:slideInLeft .25s cubic-bezier(0.16, 1, 0.3, 1); }
 
 .drawer-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; padding-bottom:14px; border-bottom:1px solid var(--border); }
 .drawer-header h3 { margin:0; font:600 18px/1.2 var(--font-serif); color:var(--foreground); }
-.close-btn { border:0; background:none; color:var(--muted); font-size:26px; padding:0; line-height:1; }
+.close-btn { border:0; background:none; color:var(--muted); font-size:28px; padding:4px 8px; line-height:1; cursor:pointer; touch-action:manipulation; }
 
 .drawer-section { margin-bottom:24px; }
 .drawer-section-title { font-size:11px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--primary); margin:0 0 10px; }

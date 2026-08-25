@@ -632,17 +632,20 @@ export default function Page() {
         ) : (
           <>
             {!file ? (
-              <div 
+              <label 
                 className={`upload-box ${isDragging ? 'dragging' : ''}`} 
                 onDragOver={(event) => { event.preventDefault(); setIsDragging(true) }} 
                 onDragLeave={() => setIsDragging(false)} 
                 onDrop={onDrop} 
-                onClick={() => inputRef.current?.click()} 
-                role="button" 
-                tabIndex={0} 
-                onKeyDown={(event) => event.key === 'Enter' && inputRef.current?.click()}
+                style={{ cursor: 'pointer', display: 'block' }}
               >
-                <input ref={inputRef} type="file" accept="audio/*" onChange={onPick} hidden />
+                <input 
+                  ref={inputRef} 
+                  type="file" 
+                  accept="audio/*" 
+                  onChange={onPick} 
+                  style={{ position: 'absolute', opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' }} 
+                />
                 <div className="upload-symbol">
                   <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -653,7 +656,7 @@ export default function Page() {
                 <h2>{t.uploadTitle}</h2>
                 <p>{t.uploadDesc}<u>{t.uploadClick}</u></p>
                 <small>{t.uploadTypes}</small>
-              </div>
+              </label>
             ) : (
               <div className="audio-card">
                 <div className="audio-top">
