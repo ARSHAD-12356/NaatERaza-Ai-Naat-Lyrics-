@@ -50,6 +50,11 @@ const uiTranslations: Record<AppLanguage, {
   settingsAppLang: string
   settingsTheme: string
   settingsDarkMode: string
+  settingsApiKey: string
+  settingsApiKeyDesc: string
+  settingsApiKeyPlaceholder: string
+  settingsApiKeySave: string
+  settingsApiKeySaved: string
 }> = {
   en: {
     brandSubtitle: 'AI Naat Lyrics',
@@ -83,7 +88,12 @@ const uiTranslations: Record<AppLanguage, {
     settingsTitle: 'Settings & Preferences',
     settingsAppLang: 'App Interface Language',
     settingsTheme: 'Appearance & Theme',
-    settingsDarkMode: 'Dark Mode'
+    settingsDarkMode: 'Dark Mode',
+    settingsApiKey: 'Live Audio AI Key (Free Gemini Key)',
+    settingsApiKeyDesc: 'For 100% live audio transcription without limits, paste a free Google Gemini API key from aistudio.google.com/app/apikey',
+    settingsApiKeyPlaceholder: 'Paste Gemini key (AIza...) or OpenRouter key...',
+    settingsApiKeySave: 'Save Key',
+    settingsApiKeySaved: '✓ Key Saved'
   },
   hi: {
     brandSubtitle: 'एआई नात लिरिक़्स',
@@ -99,7 +109,7 @@ const uiTranslations: Record<AppLanguage, {
     getLyrics: 'बोल प्राप्त करें',
     languageLabel: 'भाषा:',
     chooseLanguage: 'भाषा चुनें',
-    langEn: 'अंग्रेज़ी (रोमन उर्दू)',
+    langEn: 'अंग्रेज़ी (रोمن उर्दू)',
     langHi: 'हिंदी (देवनागरी)',
     langUr: 'उर्दू लिपि',
     processingWait: 'कृपया प्रतीक्षा करें',
@@ -117,7 +127,12 @@ const uiTranslations: Record<AppLanguage, {
     settingsTitle: 'सेटिंग्स और प्राथमिकताएं',
     settingsAppLang: 'ऐप इंटरफ़ेस भाषा',
     settingsTheme: 'अपीयरेंस और थीम',
-    settingsDarkMode: 'डार्क मोड'
+    settingsDarkMode: 'डार्क मोड',
+    settingsApiKey: 'लाइव ऑडियो एआई की (फ्री जेमिनी की)',
+    settingsApiKeyDesc: '100% लाइव ऑडियो ट्रांसक्रिप्शन के लिए, aistudio.google.com/app/apikey से अपनी फ्री गूगल जेमिनी एपीआई की डालें',
+    settingsApiKeyPlaceholder: 'गूगल जेमिनी की (AIza...) यहाँ पेस्ट करें...',
+    settingsApiKeySave: 'की सेव करें',
+    settingsApiKeySaved: '✓ की सेव हो गई'
   },
   ur: {
     brandSubtitle: 'مصنوعی ذہانت نعت اشعار',
@@ -151,7 +166,12 @@ const uiTranslations: Record<AppLanguage, {
     settingsTitle: 'ترتیبات اور ترجیحات',
     settingsAppLang: 'ایپ کی زبان',
     settingsTheme: 'مظہر اور تھیم',
-    settingsDarkMode: 'ڈارک موڈ'
+    settingsDarkMode: 'ڈارک موڈ',
+    settingsApiKey: 'لائیو آڈیو اے آئی کی (مفت جیمنی کی)',
+    settingsApiKeyDesc: 'مکمل لائیو آڈیو ٹرانسکرپشن کے لیے aistudio.google.com/app/apikey سے اپنی مفت جیمنی اے پی آئی کی دراج کریں',
+    settingsApiKeyPlaceholder: 'جیمنی کی (AIza...) یہاں درج کریں...',
+    settingsApiKeySave: 'کی محفوظ کریں',
+    settingsApiKeySaved: '✓ کی محفوظ ہو گئی'
   }
 }
 
@@ -168,6 +188,10 @@ export default function Page() {
   const [copied, setCopied] = useState(false)
   const [lyrics, setLyrics] = useState('')
   const [error, setError] = useState('')
+
+  // Custom User API Key State
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [apiKeySaved, setApiKeySaved] = useState(false)
 
   // Slide-over Settings Drawer State
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
@@ -188,6 +212,11 @@ export default function Page() {
     }
     const savedDarkMode = localStorage.getItem('naateraza-darkmode') === 'true'
     setIsDarkMode(savedDarkMode)
+
+    const savedKey = localStorage.getItem('naateraza-custom-key') || ''
+    if (savedKey) {
+      setApiKeyInput(savedKey)
+    }
   }, [])
 
   function toggleDarkMode() {
@@ -204,6 +233,13 @@ export default function Page() {
   function changeAppLang(nextLang: AppLanguage) {
     setAppLang(nextLang)
     localStorage.setItem('naateraza-app-lang', nextLang)
+  }
+
+  function saveApiKey() {
+    const trimmed = apiKeyInput.trim()
+    localStorage.setItem('naateraza-custom-key', trimmed)
+    setApiKeySaved(true)
+    setTimeout(() => setApiKeySaved(false), 2000)
   }
 
   function acceptFile(next: File | undefined) {
@@ -253,9 +289,20 @@ export default function Page() {
     form.append('audio', file)
     form.append('target_language', selectedLang)
 
+    const savedKey = typeof window !== 'undefined' ? localStorage.getItem('naateraza-custom-key') || '' : ''
+    const headers: Record<string, string> = {}
+    if (savedKey) {
+      headers['x-api-key'] = savedKey
+      if (savedKey.startsWith('AIza')) headers['x-api-provider'] = 'gemini'
+      else if (savedKey.startsWith('sk-or-')) headers['x-api-provider'] = 'openrouter'
+      else if (savedKey.startsWith('sk-')) headers['x-api-provider'] = 'openai'
+      else if (savedKey.startsWith('gsk_')) headers['x-api-provider'] = 'groq'
+    }
+
     try {
       const response = await fetch('/api/transcribe', {
         method: 'POST',
+        headers,
         body: form
       })
       const data = await response.json()
@@ -376,6 +423,47 @@ export default function Page() {
                 >
                   <span>اردو (Urdu)</span>
                   {appLang === 'ur' && <span>✓</span>}
+                </button>
+              </div>
+            </div>
+
+            {/* Live Audio AI API Key Option */}
+            <div className="drawer-section">
+              <p className="drawer-section-title">{t.settingsApiKey}</p>
+              <small style={{ color: 'var(--muted)', display: 'block', marginBottom: '8px', fontSize: '11px', lineHeight: '1.4' }}>
+                {t.settingsApiKeyDesc}
+              </small>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input 
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder={t.settingsApiKeyPlaceholder}
+                  style={{
+                    flex: 1,
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border)',
+                    background: 'var(--surface)',
+                    color: 'var(--foreground)',
+                    fontSize: '12px',
+                    outline: 'none'
+                  }}
+                />
+                <button 
+                  onClick={saveApiKey}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    background: 'var(--primary)',
+                    color: 'var(--background)',
+                    border: 0,
+                    fontWeight: 600,
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {apiKeySaved ? t.settingsApiKeySaved : t.settingsApiKeySave}
                 </button>
               </div>
             </div>

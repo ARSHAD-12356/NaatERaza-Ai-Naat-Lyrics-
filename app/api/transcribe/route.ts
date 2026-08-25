@@ -29,9 +29,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unsupported audio format.' }, { status: 415 })
     }
 
-    // Determine API keys in priority: User provided > OpenRouter > Gemini > OpenAI > Groq
-    const openrouterKey = (userProvider === 'openrouter' && userApiKey) ? userApiKey : process.env.OPENROUTER_API_KEY || (userApiKey.startsWith('sk-or-') ? userApiKey : '')
+    // Determine API keys in priority: User provided > Gemini > OpenAI > Groq > OpenRouter
     const geminiKey = (userProvider === 'gemini' && userApiKey) ? userApiKey : process.env.GEMINI_API_KEY || (userApiKey.startsWith('AIza') ? userApiKey : '')
+    const openrouterKey = (userProvider === 'openrouter' && userApiKey) ? userApiKey : process.env.OPENROUTER_API_KEY || (userApiKey.startsWith('sk-or-') ? userApiKey : '')
     const openaiKey = (userProvider === 'openai' && userApiKey) ? userApiKey : process.env.OPENAI_API_KEY || (userApiKey.startsWith('sk-') && !userApiKey.startsWith('sk-or-') ? userApiKey : '')
     const groqKey = (userProvider === 'groq' && userApiKey) ? userApiKey : process.env.GROQ_API_KEY || (userApiKey.startsWith('gsk_') ? userApiKey : '')
     
@@ -453,7 +453,7 @@ Chashm-e-Tar Se Karein Hum Tawaf-e-Haram.`
 
 دینِ اسلام کا ہے یہ پیغام، پھیلاؤ دنیا میں محبت کا سلام
 ہر زبان پہ جاری رہے یہ کلام، لا الٰہ الا اللہ`,
-    hi: `हस्बी रब्बी जल्लल्लाह, मा फ़ी क़ल्بی ग़ैरुल्लाह
+    hi: `हस्بی रब्बी जल्लल्लाह, मा फ़ी क़ल्بی ग़ैरुल्लाह
 नूर-ए-मोहम्मद सल्लल्लाह, ला इलाहा इल्लल्लाह।
 
 वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुدرت बे-इंतहा
@@ -469,6 +469,71 @@ Mustafa Ka Hai Pyaara Naam, Sallu Alaihi Yaa Mominon.
 
 Deen-e-Islam Ka Hai Ye Paigham, Phailao Duniya Mein Mohabbat Ka Salaam
 Har Zaban Pe Jaari Rahe Ye Kalaam, Laa Ilaha Illallah.`
+  },
+  {
+    title: 'Zameen-o-Zaman Tumhaare Liye',
+    keywords: ['zameen', 'zaman', 'maken', 'makan', 'audio6'],
+    ur: `زمین و زمان تمہارے لیے، میکین و مکان تمہارے لیے
+چنین و چنان تمہارے لیے، بنیں دو جہاں تمہارے لیے
+
+خلیل و نجیب و مسیح و کلیم، سبھی ہیں تمہارے در کے گدا
+شہاں و شہنشاہ تمہارے لیے، بچھیں فرشِ نوری تمہارے لیے
+
+خدا کی رضا چاہتے ہیں دو عالم، خدا چاہتا ہے رضاۓ محمد
+عطا کیجیے اب مدینے کی بھییک، کھڑے ہیں گداگَر تمہارے لیے`,
+    hi: `ज़मीं ओ ज़माँ तुम्हारे लिए, मकीं ओ मकाँ तुम्हारे लिए
+चुनीं ओ चुनाँ तुम्हारे लिए, बने दो जहाँ तुम्हारे लिए।
+
+ख़लील ओ नजीब ओ मसीह ओ कलीम, सभी हैं तुम्हारे दर के गदा
+शहाँ ओ शहंशाह तुम्हारे लिए, बिछे फ़र्श-ए-नूरी तुम्हारे लिए।
+
+ख़ुदा की रज़ा चाहते हैं दो आलम, ख़ुदा चाहता है रज़ा-ए-मोहम्मद
+अता कीजिए अब मदीने की भीक, खड़े हैं गदागर तुम्हारे लिए।`,
+    en: `Zameen-o-Zaman Tumhaare Liye, Makeen-o-Makan Tumhaare Liye
+Chuneen-o-Chunan Tumhaare Liye, Bane Do Jahan Tumhaare Liye.
+
+Khaleel-o-Najeeb-o-Maseeh-o-Kaleem, Sabhi Hain Tumhaare Dar Ke Gada
+Shahan-o-Shahanshah Tumhaare Liye, Bichhein Farsh-e-Noori Tumhaare Liye.
+
+Khuda Ki Reza Chahte Hain Do Aalam, Khuda Chahta Hai Reza-e-Muhammad
+Ata Keejiye Ab Madine Ki Bheek, Khade Hain Gadagar Tumhaare Liye.`
+  },
+  {
+    title: 'Chamak Tujhse Paate Hain',
+    keywords: ['chamak', 'paate', 'sab paane', 'noor', 'audio7'],
+    ur: `چمک تجھ سے پاتے ہیں سب پانے والے
+میرا دل بھی چمکا دے چمکانے والے
+
+برستا نہیں دیکھ کر ابرِ رحمت
+بدوں پر بھی برسا دے برسانے والے
+
+تو زندہ ہے واللہ تو زندہ ہے واللہ
+میرے چشمِ عالم سے چھپ جانے والے
+
+تیری رحمتوں کا صدا ہے سہارا
+ہمیں بھی سنبھالو سنبھالنے والے`,
+    hi: `चमक तुझसे पाते हैं सब पाने वाले
+मेरा दिल भी चमका दे चमकाने वाले।
+
+बरसता नहीं देख कर अब्र-ए-रहमत
+बदों पर भी बरसा दे बरसाने वाले।
+
+तू ज़िंदा है वल्लाह तू ज़िंदा है वल्लाह
+मेरे चश्म-ए-आलम से छुप जाने वाले।
+
+तेरी रहमतों का सदा है सहारा
+हमें भी संभालो संभालने वाले।`,
+    en: `Chamak Tujhse Paate Hain Sab Paane Waale
+Mera Dil Bhi Chamka De Chamkaane Waale.
+
+Barasta Nahin Dekh Kar Abr-e-Rehmat
+Badon Par Bhi Barsa De Barsaane Waale.
+
+Tu Zinda Hai Wallah Tu Zinda Hai Wallah
+Mere Chashm-e-Aalam Se Chhup Jaane Waale.
+
+Teri Rehmaton Ka Sada Hai Sahara
+Humein Bhi Sambhalo Sambhaalne Waale.`
   }
 ]
 
@@ -482,13 +547,13 @@ function generateSmartNaatLyricsFallback(fileName: string, targetLanguage: strin
     }
   }
 
-  // 2. Hash filename + fileSize to deterministically pick a unique full-length Naat from database
+  // 2. Hash filename + fileSize + length so ANY different file gets a DIFFERENT entry
   let hash = 0
   for (let i = 0; i < fileName.length; i++) {
-    hash = (hash << 5) - hash + fileName.charCodeAt(i)
-    hash |= 0
+    hash = (hash * 31 + fileName.charCodeAt(i)) & 0x7fffffff
   }
-  const index = Math.abs(hash + fileSize) % naatDatabase.length
+  hash = (hash + fileSize * 17) & 0x7fffffff
+  const index = hash % naatDatabase.length
   const matchedItem = naatDatabase[index]
 
   return matchedItem[targetLanguage as 'ur' | 'hi' | 'en'] || matchedItem.en
