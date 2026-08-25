@@ -95,9 +95,8 @@ export async function POST(request: NextRequest) {
       masterUrduLyrics = generateSmartNaatLyricsFallback(audio.name, 'ur')
     }
 
-    // STAGE 2: Transliterate Master Urdu Lyrics into Selected Target Language
+    // STAGE 2: Transliterate Master Urdu Lyrics into Selected Target Language (100% Line for Line)
     let finalLyrics = masterUrduLyrics
-
     const activeApiKey = openrouterKey || genericUserKey || geminiKey || openaiKey
 
     if (targetLanguage === 'en') {
@@ -105,10 +104,18 @@ export async function POST(request: NextRequest) {
         try {
           finalLyrics = await convertUrduTextToTargetLanguage(activeApiKey, masterUrduLyrics, 'en')
         } catch {
-          finalLyrics = generateSmartNaatLyricsFallback(audio.name, 'en')
+          finalLyrics = convertUrduScriptToRomanUrdu(masterUrduLyrics)
         }
       } else {
-        finalLyrics = generateSmartNaatLyricsFallback(audio.name, 'en')
+        finalLyrics = convertUrduScriptToRomanUrdu(masterUrduLyrics)
+      }
+
+      // ABSOLUTE GUARANTEE: Never return Urdu/Hindi script when English is selected!
+      if (/[\u0600-\u06FF]/.test(finalLyrics)) {
+        finalLyrics = convertUrduScriptToRomanUrdu(finalLyrics)
+      }
+      if (/[\u0900-\u097F]/.test(finalLyrics)) {
+        finalLyrics = convertDevanagariToHinglish(finalLyrics)
       }
     } else if (targetLanguage === 'hi') {
       if (activeApiKey) {
@@ -120,11 +127,6 @@ export async function POST(request: NextRequest) {
       } else {
         finalLyrics = generateSmartNaatLyricsFallback(audio.name, 'hi')
       }
-    }
-
-    // Post-Processing Safeguard: Ensure no Devanagari leaks into English
-    if (targetLanguage === 'en' && /[\u0900-\u097F]/.test(finalLyrics)) {
-      finalLyrics = convertDevanagariToHinglish(finalLyrics)
     }
 
     return NextResponse.json({
@@ -297,43 +299,46 @@ CRITICAL ACCURACY RULES:
 2. Write in clean Devanagari Hindi script (e.g. "हुज़ूर आ गए हैं, फ़लक के नज़ारो...").
 3. Output ONLY the line-by-line Hindi lyrics text.\n\nCOMPLETE URDU LYRICS:\n${urduLyrics}`
 
-  let result = ''
+  const isGeminiDirect = apiKey.startsWith('AIza')
+  const models = isGeminiDirect ? ['gemini-2.5-flash'] : ['google/gemini-2.5-flash', 'google/gemini-2.0-flash-001', 'google/gemini-flash-1.5']
 
-  // If OpenRouter key or generic key
-  if (apiKey.startsWith('sk-or-') || apiKey.startsWith('AIza') || apiKey.startsWith('sk-')) {
-    const isGeminiDirect = apiKey.startsWith('AIza')
-    const url = isGeminiDirect
-      ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
-      : 'https://openrouter.ai/api/v1/chat/completions'
+  for (const model of models) {
+    try {
+      const url = isGeminiDirect
+        ? `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+        : 'https://openrouter.ai/api/v1/chat/completions'
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (!isGeminiDirect) {
-      headers['Authorization'] = `Bearer ${apiKey}`
-      headers['HTTP-Referer'] = 'https://naateraza.app'
-      headers['X-Title'] = 'NaatERaza AI Lyrics'
-    }
-
-    const body = isGeminiDirect
-      ? JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-      : JSON.stringify({
-          model: 'google/gemini-2.5-flash',
-          temperature: 0,
-          max_tokens: 3500,
-          messages: [{ role: 'user', content: prompt }]
-        })
-
-    const response = await fetch(url, { method: 'POST', headers, body })
-    if (response.ok) {
-      const data = await response.json()
-      if (isGeminiDirect) {
-        result = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || ''
-      } else {
-        result = data.choices?.[0]?.message?.content?.trim() || ''
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (!isGeminiDirect) {
+        headers['Authorization'] = `Bearer ${apiKey}`
+        headers['HTTP-Referer'] = 'https://naateraza.app'
+        headers['X-Title'] = 'NaatERaza AI Lyrics'
       }
+
+      const body = isGeminiDirect
+        ? JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        : JSON.stringify({
+            model,
+            temperature: 0,
+            max_tokens: 3500,
+            messages: [{ role: 'user', content: prompt }]
+          })
+
+      const response = await fetch(url, { method: 'POST', headers, body })
+      if (response.ok) {
+        const data = await response.json()
+        const text = isGeminiDirect
+          ? data.candidates?.[0]?.content?.parts?.[0]?.text?.trim()
+          : data.choices?.[0]?.message?.content?.trim()
+        if (text) return text
+      }
+    } catch (err) {
+      console.warn(`Stage 2 conversion failed with model ${model}:`, err)
     }
   }
 
-  return result || urduLyrics
+  // Guaranteed fallback for English: Convert Urdu script directly to Roman Urdu!
+  return isEnglish ? convertUrduScriptToRomanUrdu(urduLyrics) : urduLyrics
 }
 
 // Groq Whisper Transcription
@@ -403,6 +408,38 @@ Durood Un Pe Bhejo, Salaam Un Pe Bhejo
 Shafi-e-Mahshar, Huzoor Aa Gaye Hain.
 
 (${cleanName})`
+}
+
+// Direct Urdu Script -> Roman Urdu / Hinglish Transliteration Engine
+function convertUrduScriptToRomanUrdu(text: string): string {
+  const map: Record<string, string> = {
+    'ا': 'a', 'آ': 'aa', 'ب': 'b', 'پ': 'p', 'ت': 't', 'ٹ': 't', 'ث': 's',
+    'ج': 'j', 'چ': 'ch', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ڈ': 'd', 'ذ': 'z',
+    'ر': 'r', 'ڑ': 'r', 'ز': 'z', 'ژ': 'zh', 'س': 's', 'ش': 'sh', 'ص': 's',
+    'ض': 'z', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f', 'ق': 'q',
+    'ک': 'k', 'گ': 'g', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ں': 'n', 'و': 'o',
+    'ہ': 'h', 'ھ': 'h', 'ء': '', 'ی': 'i', 'ے': 'e', 'ِ': 'i', 'ُ': 'u', 'َ': 'a',
+    'ٰ': 'a', 'ً': 'an'
+  }
+
+  let result = ''
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    if (map[char] !== undefined) {
+      result += map[char]
+    } else {
+      result += char
+    }
+  }
+
+  return result
+    .split('\n')
+    .map(line => {
+      const trimmed = line.trim()
+      if (!trimmed) return ''
+      return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+    })
+    .join('\n')
 }
 
 // Devanagari Hindi -> Hinglish (Roman Urdu) Converter Utility
