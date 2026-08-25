@@ -109,7 +109,7 @@ const uiTranslations: Record<AppLanguage, {
     getLyrics: 'बोल प्राप्त करें',
     languageLabel: 'भाषा:',
     chooseLanguage: 'भाषा चुनें',
-    langEn: 'अंग्रेज़ी (रोمن उर्दू)',
+    langEn: 'अंग्रेज़ी (रोमन उर्दू)',
     langHi: 'हिंदी (देवनागरी)',
     langUr: 'उर्दू लिपि',
     processingWait: 'कृपया प्रतीक्षा करें',
@@ -285,8 +285,11 @@ export default function Page() {
     setError('')
     setStatus('processing')
 
+    // Automatically compress audio for Vercel serverless compliance if over 3MB
+    const fileToUpload = await compressAudioIfNeeded(file)
+
     const form = new FormData()
-    form.append('audio', file)
+    form.append('audio', fileToUpload)
     form.append('target_language', selectedLang)
 
     const savedKey = typeof window !== 'undefined' ? localStorage.getItem('naateraza-custom-key') || '' : ''
@@ -314,7 +317,7 @@ export default function Page() {
       } else {
         const textBody = await response.text()
         if (response.status === 413 || textBody.toLowerCase().includes('request entity') || textBody.toLowerCase().includes('large')) {
-          throw new Error(appLang === 'ur' ? 'آڈیو فائل سائز سرور کی حد سے زیادہ ہے۔ براہ کرم چھوٹی فائل استعمال کریں۔' : appLang === 'hi' ? 'ऑडियो फ़ाइल साइज़ सर्वर की सीमा से अधिक है। कृपया छोटी फ़ाइल उपयोग करें।' : 'This audio file is too large for the server. Please select a smaller audio file under 20 MB.')
+          throw new Error(appLang === 'ur' ? 'آڈیو فائل سائز سرور کی حد سے زیادہ ہے۔ براہ کرم چھوٹی فائل استعمال کریں۔' : appLang === 'hi' ? 'ऑडियो फ़ाइल साइज़ सर्वर की सीमा से अधिक है। कृपया छोटी फ़ाइल उपयोग करें।' : 'This audio file is too large for the server. Please select a smaller audio file under 25 MB.')
         }
         throw new Error(textBody || `Server error status ${response.status}`)
       }
@@ -382,7 +385,7 @@ export default function Page() {
               <span />
               <span />
             </div>
-            <span>{appLang === 'ur' ? 'ترتیبات' : appLang === 'hi' ? 'सेटिंग्स' : 'Settings'}</span>
+            <span>{appLang === 'ur' ? 'ترتیبات' : appLang === 'hi' ? 'сеटिंग्स' : 'Settings'}</span>
           </button>
         </div>
       </header>
@@ -682,4 +685,66 @@ export default function Page() {
       </footer>
     </main>
   )
+}
+
+// Web Audio API Audio Compressor Helper for Vercel 4.5MB Serverless Payload Compliance
+async function compressAudioIfNeeded(file: File): Promise<File> {
+  // If file size is under 3 MB, no compression needed
+  if (file.size <= 3 * 1024 * 1024) {
+    return file
+  }
+
+  try {
+    const arrayBuffer = await file.arrayBuffer()
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 })
+    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
+
+    const offlineCtx = new OfflineAudioContext(1, audioBuffer.duration * 16000, 16000)
+    const source = offlineCtx.createBufferSource()
+    source.buffer = audioBuffer
+    source.connect(offlineCtx.destination)
+    source.start(0)
+
+    const renderedBuffer = await offlineCtx.startRendering()
+    const pcmData = renderedBuffer.getChannelData(0)
+    const wavBlob = encodeWAV(pcmData, 16000)
+
+    return new File([wavBlob], file.name.replace(/\.[^/.]+$/, '') + '_compact.wav', { type: 'audio/wav' })
+  } catch (err) {
+    console.warn('Client audio compression skipped, using original file:', err)
+    return file
+  }
+}
+
+function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2)
+  const view = new DataView(buffer)
+
+  writeString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + samples.length * 2, true)
+  writeString(view, 8, 'WAVE')
+  writeString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeString(view, 36, 'data')
+  view.setUint32(40, samples.length * 2, true)
+
+  let offset = 44
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]))
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' })
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i))
+  }
 }
