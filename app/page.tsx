@@ -244,14 +244,24 @@ export default function Page() {
 
   function acceptFile(next: File | undefined) {
     setError('')
-    if (!next || (!next.type.startsWith('audio/') && !next.name.match(/\.(mp3|wav|m4a|flac|ogg)$/i))) {
-      setError(appLang === 'ur' ? 'براہ کرم صحیح آڈیو فائل منتخب کریں۔' : appLang === 'hi' ? 'कृपया सही ऑडियो फ़ाइल चुनें।' : 'Please upload an audio file (MP3, WAV, M4A, FLAC, or OGG).')
+    if (!next) return
+
+    // Mobile-friendly audio validation (handles iOS Safari & Android Chrome file selections)
+    const mime = (next.type || '').toLowerCase()
+    const name = (next.name || '').toLowerCase()
+    const isAudioMime = !mime || mime.startsWith('audio/') || mime.includes('octet-stream') || mime.includes('mp4')
+    const isAudioExt = !name || !!name.match(/\.(mp3|wav|m4a|flac|ogg|aac|opus|3gp|m4p|mp4|webm|amr|wma)$/i)
+
+    if (!isAudioMime && !isAudioExt) {
+      setError(appLang === 'ur' ? 'براہ کرم صحیح آڈیو فائل منتخب کریں۔' : appLang === 'hi' ? 'कृपया सही ऑडियो फ़ाइल चुनें।' : 'Please upload a valid audio file.')
       return
     }
-    if (next.size > 25 * 1024 * 1024) {
-      setError(appLang === 'ur' ? 'فائل سائز بہت بڑا ہے۔ (زیادہ سے زیادہ 25MB)' : appLang === 'hi' ? 'फ़ाइल साइज़ बहुत बड़ा है। (अधिकतम 25MB)' : 'This audio file is too large (max 25MB). Please choose a smaller audio file.')
+
+    if (next.size > 35 * 1024 * 1024) {
+      setError(appLang === 'ur' ? 'فائل سائز بہت بڑا ہے۔ (زیادہ سے زیادہ 35MB)' : appLang === 'hi' ? 'फ़ाइल साइज़ बहुत बड़ा है। (अधिकतम 35MB)' : 'This audio file is too large (max 35MB). Please choose a smaller audio file.')
       return
     }
+
     setFile(next)
     setLyrics('')
     setStatus('idle')
@@ -424,7 +434,7 @@ export default function Page() {
               <span />
               <span />
             </div>
-            <span>{appLang === 'ur' ? 'ترتیبات' : appLang === 'hi' ? 'сеटिंग्स' : 'Settings'}</span>
+            <span>{appLang === 'ur' ? 'ترتیبات' : appLang === 'hi' ? 'सेटिंग्स' : 'Settings'}</span>
           </button>
         </div>
       </header>
@@ -642,7 +652,7 @@ export default function Page() {
                 <input 
                   ref={inputRef} 
                   type="file" 
-                  accept="audio/*" 
+                  accept="audio/*,.mp3,.wav,.m4a,.flac,.ogg,.aac,.opus,.3gp,.mp4,.m4p" 
                   onChange={onPick} 
                   style={{ position: 'absolute', opacity: 0, width: '1px', height: '1px', pointerEvents: 'none' }} 
                 />
