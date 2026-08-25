@@ -165,7 +165,7 @@ async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeTyp
             ]
           }],
           generationConfig: {
-            maxOutputTokens: 16000,
+            maxOutputTokens: 40000,
             temperature: 0.1
           }
         })
