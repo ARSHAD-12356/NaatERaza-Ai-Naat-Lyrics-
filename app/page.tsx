@@ -285,13 +285,6 @@ export default function Page() {
     setError('')
     setStatus('processing')
 
-    // Automatically compress audio for Vercel serverless compliance if over 3MB
-    const fileToUpload = await compressAudioIfNeeded(file)
-
-    const form = new FormData()
-    form.append('audio', fileToUpload)
-    form.append('target_language', selectedLang)
-
     const savedKey = typeof window !== 'undefined' ? localStorage.getItem('naateraza-custom-key') || '' : ''
     const headers: Record<string, string> = {}
     if (savedKey) {
@@ -303,6 +296,55 @@ export default function Page() {
     }
 
     try {
+      const CHUNK_SIZE = 2 * 1024 * 1024 // 2 MB per chunk (well under Vercel's 4.5 MB limit)
+
+      if (file.size > CHUNK_SIZE) {
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+        const uploadId = 'up_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+        let lastData: any = null
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE
+          const end = Math.min(file.size, start + CHUNK_SIZE)
+          const chunkBlob = file.slice(start, end)
+          const chunkFile = new File([chunkBlob], file.name, { type: file.type || 'audio/mp3' })
+
+          const chunkForm = new FormData()
+          chunkForm.append('audio', chunkFile)
+          chunkForm.append('target_language', selectedLang)
+          chunkForm.append('upload_id', uploadId)
+          chunkForm.append('chunk_index', String(i))
+          chunkForm.append('total_chunks', String(totalChunks))
+
+          const response = await fetch('/api/transcribe', {
+            method: 'POST',
+            headers,
+            body: chunkForm
+          })
+
+          const contentType = response.headers.get('content-type') || ''
+          if (contentType.includes('application/json')) {
+            lastData = await response.json()
+          } else {
+            const textBody = await response.text()
+            throw new Error(textBody || `Server error status ${response.status}`)
+          }
+
+          if (!response.ok || !lastData?.success) {
+            throw new Error(lastData?.error || 'Failed during chunked audio upload')
+          }
+        }
+
+        setLyrics(lastData.lyrics)
+        setStatus('result')
+        return
+      }
+
+      // Small files under 2 MB
+      const form = new FormData()
+      form.append('audio', file)
+      form.append('target_language', selectedLang)
+
       const response = await fetch('/api/transcribe', {
         method: 'POST',
         headers,
@@ -316,9 +358,6 @@ export default function Page() {
         data = await response.json()
       } else {
         const textBody = await response.text()
-        if (response.status === 413 || textBody.toLowerCase().includes('request entity') || textBody.toLowerCase().includes('large')) {
-          throw new Error(appLang === 'ur' ? 'آڈیو فائل سائز سرور کی حد سے زیادہ ہے۔ براہ کرم چھوٹی فائل استعمال کریں۔' : appLang === 'hi' ? 'ऑडियो फ़ाइल साइज़ सर्वर की सीमा से अधिक है। कृपया छोटी फ़ाइल उपयोग करें।' : 'This audio file is too large for the server. Please select a smaller audio file under 25 MB.')
-        }
         throw new Error(textBody || `Server error status ${response.status}`)
       }
 

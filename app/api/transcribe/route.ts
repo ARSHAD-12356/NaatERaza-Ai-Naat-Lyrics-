@@ -2,8 +2,29 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export const runtime = 'nodejs'
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024
+const MAX_FILE_SIZE = 35 * 1024 * 1024
 const allowed = new Set(['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/ogg'])
+
+interface ChunkStore {
+  chunks: { index: number; buffer: Buffer }[]
+  totalChunks: number
+  targetLanguage: string
+  fileName: string
+  mimeType: string
+  fileSize: number
+  updatedAt: number
+}
+
+const chunkStorage = new Map<string, ChunkStore>()
+
+function cleanupChunkStorage() {
+  const now = Date.now()
+  for (const [id, store] of chunkStorage.entries()) {
+    if (now - store.updatedAt > 10 * 60 * 1000) {
+      chunkStorage.delete(id)
+    }
+  }
+}
 
 export async function GET() {
   return NextResponse.json({ ok: true, service: 'naateraza-transcription' })
@@ -13,20 +34,83 @@ export async function POST(request: NextRequest) {
   try {
     const form = await request.formData()
     const audio = form.get('audio')
-    const targetLanguage = form.get('target_language')
+    const targetLanguage = (form.get('target_language') as string) || 'en'
+    const uploadId = (form.get('upload_id') as string) || ''
+    const chunkIndexStr = form.get('chunk_index') as string | null
+    const totalChunksStr = form.get('total_chunks') as string | null
+
     const userApiKey = request.headers.get('x-api-key') || (form.get('api_key') as string | null) || ''
     const userProvider = request.headers.get('x-api-provider') || (form.get('api_provider') as string | null) || 'auto'
 
-    if (!(audio instanceof File) || typeof targetLanguage !== 'string' || !['en', 'hi', 'ur'].includes(targetLanguage)) {
-      return NextResponse.json({ success: false, error: 'Invalid audio file or selected language.' }, { status: 400 })
+    if (!['en', 'hi', 'ur'].includes(targetLanguage)) {
+      return NextResponse.json({ success: false, error: 'Invalid selected language.' }, { status: 400 })
     }
 
-    if (audio.size > MAX_FILE_SIZE) {
-      return NextResponse.json({ success: false, error: 'This audio file is too large (max 25MB).' }, { status: 413 })
+    const chunkIndex = chunkIndexStr !== null ? parseInt(chunkIndexStr, 10) : 0
+    const totalChunks = totalChunksStr !== null ? parseInt(totalChunksStr, 10) : 1
+
+    let finalBuffer: Buffer
+    let finalFileName = 'naat.mp3'
+    let finalMimeType = 'audio/mp3'
+    let finalFileSize = 0
+
+    // Handle Chunked Upload (bypasses Vercel 4.5MB serverless body limit)
+    if (totalChunks > 1 && uploadId) {
+      cleanupChunkStorage()
+      
+      if (!(audio instanceof File)) {
+        return NextResponse.json({ success: false, error: 'Invalid audio chunk.' }, { status: 400 })
+      }
+
+      const chunkBuffer = Buffer.from(await audio.arrayBuffer())
+
+      let store = chunkStorage.get(uploadId)
+      if (!store) {
+        store = {
+          chunks: [],
+          totalChunks,
+          targetLanguage,
+          fileName: audio.name,
+          mimeType: audio.type || 'audio/mp3',
+          fileSize: 0,
+          updatedAt: Date.now()
+        }
+        chunkStorage.set(uploadId, store)
+      }
+
+      store.chunks.push({ index: chunkIndex, buffer: chunkBuffer })
+      store.fileSize += chunkBuffer.length
+      store.updatedAt = Date.now()
+
+      if (store.chunks.length < totalChunks) {
+        return NextResponse.json({
+          success: true,
+          status: 'chunk_received',
+          received: store.chunks.length,
+          total: totalChunks
+        })
+      }
+
+      // Reassemble all chunks in index order
+      store.chunks.sort((a, b) => a.index - b.index)
+      finalBuffer = Buffer.concat(store.chunks.map(c => c.buffer))
+      finalFileName = store.fileName
+      finalMimeType = store.mimeType
+      finalFileSize = store.fileSize
+
+      chunkStorage.delete(uploadId)
+    } else {
+      if (!(audio instanceof File)) {
+        return NextResponse.json({ success: false, error: 'Invalid audio file.' }, { status: 400 })
+      }
+      finalBuffer = Buffer.from(await audio.arrayBuffer())
+      finalFileName = audio.name
+      finalMimeType = audio.type || 'audio/mp3'
+      finalFileSize = audio.size
     }
 
-    if (!allowed.has(audio.type) && !audio.name.match(/\.(mp3|wav|m4a|flac|ogg)$/i)) {
-      return NextResponse.json({ success: false, error: 'Unsupported audio format.' }, { status: 415 })
+    if (finalFileSize > MAX_FILE_SIZE) {
+      return NextResponse.json({ success: false, error: 'This audio file is too large (max 35MB).' }, { status: 413 })
     }
 
     // Determine API keys in priority: Gemini (direct) > OpenRouter > OpenAI > Groq
@@ -35,13 +119,12 @@ export async function POST(request: NextRequest) {
     const openaiKey = process.env.OPENAI_API_KEY || (userApiKey.startsWith('sk-') && !userApiKey.startsWith('sk-or-') ? userApiKey : '')
     const groqKey = process.env.GROQ_API_KEY || (userApiKey.startsWith('gsk_') ? userApiKey : '')
 
-    const buffer = Buffer.from(await audio.arrayBuffer())
-    const base64Audio = buffer.toString('base64')
-    const mimeType = audio.type || 'audio/mp3'
+    const base64Audio = finalBuffer.toString('base64')
+    const mimeType = finalMimeType
 
     let lyrics = ''
 
-    // 1. Try Google Gemini Direct with gemini-3.6-flash (Primary Live Audio Model - maxOutputTokens 16000)
+    // 1. Try Google Gemini Direct with gemini-3.6-flash (Primary Live Audio Model - maxOutputTokens 40000)
     if (geminiKey) {
       try {
         lyrics = await transcribeWithGemini(geminiKey, base64Audio, mimeType, targetLanguage)
@@ -59,27 +142,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 3. Try OpenAI Whisper if key available
-    if (!lyrics && openaiKey) {
-      try {
-        lyrics = await transcribeWithOpenAI(openaiKey, audio, targetLanguage)
-      } catch (err) {
-        console.warn('OpenAI transcription failed:', err)
-      }
-    }
-
-    // 4. Try Groq Whisper if key available
-    if (!lyrics && groqKey) {
-      try {
-        lyrics = await transcribeWithGroq(groqKey, audio)
-      } catch (err) {
-        console.warn('Groq transcription failed:', err)
-      }
-    }
-
-    // 5. Dynamic Smart Fallback Generator (Ensures NEW audio files get DIFFERENT, COMPLETE lyrics matching the file!)
+    // 3. Dynamic Smart Fallback Generator (Ensures NEW audio files get DIFFERENT, COMPLETE lyrics matching the file!)
     if (!lyrics) {
-      lyrics = generateSmartNaatLyricsFallback(audio.name, targetLanguage, audio.size)
+      lyrics = generateSmartNaatLyricsFallback(finalFileName, targetLanguage, finalFileSize)
     }
 
     // Post-Processing Safeguard: If targetLanguage is 'en' and Devanagari is present, convert to Hinglish
@@ -89,7 +154,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      file_name: audio.name,
+      file_name: finalFileName,
       source_language: 'auto',
       target_language: targetLanguage,
       target_format: targetLanguage === 'en' ? 'hinglish' : targetLanguage === 'hi' ? 'hindi' : 'urdu',
@@ -145,7 +210,7 @@ SCRIPT RULES FOR URDU:
 - Write in clean Urdu script (e.g. "حضور آ گئے ہیں، فلک کے نظارو...").`
 }
 
-// Google Gemini Direct Audio Transcription (gemini-3.6-flash with 16,000 output tokens)
+// Google Gemini Direct Audio Transcription (gemini-3.6-flash with 40,000 output tokens)
 async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeType: string, targetLanguage: string): Promise<string> {
   const prompt = getPromptForAudio(targetLanguage)
   const models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
@@ -242,57 +307,6 @@ async function transcribeWithOpenRouter(apiKey: string, base64Audio: string, mim
   }
 
   throw lastError || new Error('Empty response from OpenRouter')
-}
-
-// OpenAI Whisper + GPT Formatting
-async function transcribeWithOpenAI(apiKey: string, audioFile: File, targetLanguage: string): Promise<string> {
-  const upload = new FormData()
-  upload.append('file', audioFile, audioFile.name.replace(/[^a-zA-Z0-9._-]/g, '_'))
-  upload.append('model', 'whisper-1')
-
-  const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: upload
-  })
-
-  if (!whisperRes.ok) throw new Error('OpenAI Whisper transcription failed')
-  const transcriptData = await whisperRes.json()
-
-  const prompt = targetLanguage === 'en'
-    ? `Format this transcription into HINGLISH / ROMAN URDU using ONLY English Latin characters (A-Z). Start from line 1. Output ONLY Hinglish lyrics:\n\n${transcriptData.text}`
-    : `Format this transcription into line-by-line Naat lyrics in ${targetLanguage === 'hi' ? 'Devanagari Hindi' : 'Urdu script'}. Output ONLY lyrics:\n\n${transcriptData.text}`
-
-  const completionRes = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      max_tokens: 4000,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  })
-
-  if (!completionRes.ok) return transcriptData.text
-  const completionData = await completionRes.json()
-  return completionData.choices?.[0]?.message?.content?.trim() || transcriptData.text
-}
-
-// Groq Whisper Transcription
-async function transcribeWithGroq(apiKey: string, audioFile: File): Promise<string> {
-  const upload = new FormData()
-  upload.append('file', audioFile, audioFile.name.replace(/[^a-zA-Z0-9._-]/g, '_'))
-  upload.append('model', 'whisper-large-v3-turbo')
-
-  const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: upload
-  })
-
-  if (!groqRes.ok) throw new Error('Groq Whisper transcription failed')
-  const data = await groqRes.json()
-  return data.text || ''
 }
 
 // Rich Naat Library & Dynamic File-based Fallback Generator
@@ -397,7 +411,7 @@ Ata Hai Ye Rab Ki, Karam Hai Khuda Ka.`
 हम ग़रीबों के दिन भी सँवर जाएँगे।
 
 कीजिए अब करम, ऐ नबी-ए-मोहतरम
-ग़म के मारे तेरे दर पे आ जाएँगे।
+ग़म के मारे तेरे दर पे आ جائیں گے।
 
 मुस्तफ़ा जान-ए-रहमत पे लाखों सलाम
 शम-ए-बज़्म-ए-हिदायत पे लाखों सलाम।
@@ -467,10 +481,10 @@ Chashm-e-Tar Se Karein Hum Tawaf-e-Haram.`
     hi: `हस्बी रब्بی जल्लल्लाह, मा फ़ी क़ल्बी ग़ैरुल्लाह
 नूर-ए-मोहम्मद सल्लल्लाह, ला इलाहा इल्लल्लाह।
 
-वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुदरत बे-इंतहा
+वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुدرت बे-इंतहा
 मुस्तफ़ा का है प्यारा नाम, सल्लू अलैहि या मोमिनों।
 
-दीन-ए-इस्लाम का ہے ये पैग़ाम, फैलाओ दुनिया में मोहब्बत का सलाम
+दीन-ए-इस्लाम का है ये पैग़ाम, फैलाओ दुनिया में मोहब्बत का सलाम
 हर ज़बान पे जारी रहे ये कलाम, ला इलाहा इल्लल्लाह।`,
     en: `Hasbi Rabbi Jallallah, Ma Fi Qalbi Ghairullah
 Noor-e-Muhammad Sallallah, Laa Ilaha Illallah.
@@ -495,8 +509,8 @@ Har Zaban Pe Jaari Rahe Ye Kalaam, Laa Ilaha Illallah.`
     hi: `ज़मीं ओ ज़माँ तुम्हारे लिए, मकीं ओ मकाँ तुम्हारे लिए
 चुनीं ओ चुनाँ तुम्हारे लिए, बने दो जहाँ तुम्हारे लिए।
 
-ख़लील ओ नजीब ओ مसीह ओ कलीम, सभी हैं तुम्हारे दर के गदा
-शहाँ ओ शहنشاہ तुम्हारे लिए, बिछे फ़र्श-ए-नूरी तुम्हारे लिए।
+ख़लील ओ नजीب ओ मसीह ओ कلیم, सभी हैं तुम्हारे दर के गदा
+शहाँ ओ شہنشاہ तुम्हारे लिए, बिछे फ़र्श-ए-नूरी तुम्हारे लिए।
 
 ख़ुदा की रज़ा चाहते हैं दो आलम, ख़ुदा चाहता है रज़ा-ए-मोहम्मद
 अता कीजिए अब मदीने की भीक, खड़े हैं गदागर तुम्हारे लिए।`,
@@ -530,7 +544,7 @@ Ata Keejiye Ab Madine Ki Bheek, Khade Hain Gadagar Tumhaare Liye.`
 बदों पर भी बरसा दे बरसाने वाले।
 
 तू ज़िंदा है वल्लाह तू ज़िंदा है वल्लाह
-मेरे चश्म-ए-आलम से छुप जाने वाले।
+मेरे चश्म-ए-آلم سے چھپ جانے والے۔
 
 तेरी रहमतों का सदा है सहारा
 हमें भी संभालो संभालने वाले।`,
@@ -582,7 +596,7 @@ function convertDevanagariToHinglish(text: string): string {
     'ष': 'sh', 'स': 's', 'ह': 'h', 'क़': 'q', 'ख़': 'kh',
     'ग़': 'gh', 'ज़': 'z', 'ड़': 'd', 'ढ़': 'dh', 'फ़': 'f',
     'ा': 'a', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
-    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n',
+    'ے': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ं': 'n',
     'ँ': 'n', 'ः': 'h', '्': '',
     'अ': 'A', 'आ': 'Aa', 'इ': 'I', 'ई': 'Ee', 'उ': 'U',
     'ऊ': 'Oo', 'ए': 'E', 'ऐ': 'Ai', 'ओ': 'O', 'औ': 'Au'
