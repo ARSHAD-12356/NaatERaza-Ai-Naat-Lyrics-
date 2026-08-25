@@ -305,9 +305,22 @@ export default function Page() {
         headers,
         body: form
       })
-      const data = await response.json()
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to generate lyrics')
+
+      let data: any = null
+      const contentType = response.headers.get('content-type') || ''
+
+      if (contentType.includes('application/json')) {
+        data = await response.json()
+      } else {
+        const textBody = await response.text()
+        if (response.status === 413 || textBody.toLowerCase().includes('request entity') || textBody.toLowerCase().includes('large')) {
+          throw new Error(appLang === 'ur' ? 'آڈیو فائل سائز سرور کی حد سے زیادہ ہے۔ براہ کرم چھوٹی فائل استعمال کریں۔' : appLang === 'hi' ? 'ऑडियो फ़ाइल साइज़ सर्वर की सीमा से अधिक है। कृपया छोटी फ़ाइल उपयोग करें।' : 'This audio file is too large for the server. Please select a smaller audio file under 20 MB.')
+        }
+        throw new Error(textBody || `Server error status ${response.status}`)
+      }
+
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Failed to generate lyrics')
       }
       setLyrics(data.lyrics)
       setStatus('result')
