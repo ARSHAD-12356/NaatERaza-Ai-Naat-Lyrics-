@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     let lyrics = ''
 
-    // 1. Try Google Gemini Direct with gemini-3.6-flash (Primary Live Audio Model)
+    // 1. Try Google Gemini Direct with gemini-3.6-flash (Primary Live Audio Model - maxOutputTokens 16000)
     if (geminiKey) {
       try {
         lyrics = await transcribeWithGemini(geminiKey, base64Audio, mimeType, targetLanguage)
@@ -108,38 +108,44 @@ export async function POST(request: NextRequest) {
 
 // Build Prompt for Audio Transcription
 function getPromptForAudio(targetLanguage: string): string {
+  const fullCompletionRules = `
+CRITICAL FULL-LENGTH TRANSCRIPTION INSTRUCTIONS:
+1. START FROM THE VERY FIRST SECOND / INITIAL VERSE OF THE AUDIO FILE.
+2. CONTINUE TRANSCRIBING UNTIL THE VERY LAST SECOND / FINAL VERSE OF THE AUDIO FILE.
+3. DO NOT STOP HALF-WAY. Transcribe EVERY single stanza, verse, refrain, and chorus from beginning to end without omitting any line.
+4. Output ONLY clean line-by-line lyrics text.`
+
   if (targetLanguage === 'en') {
     return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end in HINGLISH / ROMAN URDU using ONLY LATIN/ENGLISH ALPHABETS (A-Z, a-z).
+Transcribe the COMPLETE audio lyrics from start to finish into HINGLISH / ROMAN URDU using ONLY LATIN/ENGLISH ALPHABETS (A-Z, a-z).
 
-RULES:
-1. START FROM THE VERY FIRST LINE OF THE NAAT. Do NOT skip the starting verse or chorus.
-2. Transcribe EVERY single verse and stanza from start to end completely.
-3. Write in clean Roman Urdu / Hinglish (e.g. "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon...").
-4. DO NOT use Devanagari Hindi or Arabic/Urdu script.
-5. Output ONLY the clean line-by-line Hinglish lyrics text.`
+${fullCompletionRules}
+
+SCRIPT RULES FOR HINGLISH:
+- Write every word in Roman Urdu / Hinglish (e.g. "Huzoor Aa Gaye Hain, Falak Ke Nazaro Zameen Ki Baharon...").
+- DO NOT use Devanagari Hindi script. DO NOT use Arabic/Urdu script.`
   }
 
   if (targetLanguage === 'hi') {
     return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end in complete Devanagari Hindi script (हिंदी).
+Transcribe the COMPLETE audio lyrics from start to finish in complete Devanagari Hindi script (हिंदी).
 
-RULES:
-1. START FROM THE VERY FIRST LINE OF THE NAAT. Do NOT skip the starting verse or chorus.
-2. Transcribe EVERY single verse and stanza from start to end completely.
-3. Output ONLY line-by-line Devanagari Hindi lyrics text.`
+${fullCompletionRules}
+
+SCRIPT RULES FOR HINDI:
+- Write in clean Devanagari Hindi script (e.g. "हुज़ूर आ गए हैं, फ़लक के नज़ारो...").`
   }
 
   return `Listen to this audio file carefully. It is a Naat / Islamic recitation.
-Transcribe the COMPLETE audio lyrics from the VERY FIRST VERSE (beginning) to the end in complete Urdu script (اردو).
+Transcribe the COMPLETE audio lyrics from start to finish in complete Urdu script (اردو).
 
-RULES:
-1. START FROM THE VERY FIRST LINE OF THE NAAT. Do NOT skip the starting verse or chorus.
-2. Transcribe EVERY single verse and stanza from start to end completely.
-3. Output ONLY line-by-line Urdu lyrics text.`
+${fullCompletionRules}
+
+SCRIPT RULES FOR URDU:
+- Write in clean Urdu script (e.g. "حضور آ گئے ہیں، فلک کے نظارو...").`
 }
 
-// Google Gemini Direct Audio Transcription (gemini-3.6-flash supported)
+// Google Gemini Direct Audio Transcription (gemini-3.6-flash with 16,000 output tokens)
 async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeType: string, targetLanguage: string): Promise<string> {
   const prompt = getPromptForAudio(targetLanguage)
   const models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
@@ -159,7 +165,8 @@ async function transcribeWithGemini(apiKey: string, base64Audio: string, mimeTyp
             ]
           }],
           generationConfig: {
-            maxOutputTokens: 2500
+            maxOutputTokens: 16000,
+            temperature: 0.1
           }
         })
       })
@@ -261,7 +268,7 @@ async function transcribeWithOpenAI(apiKey: string, audioFile: File, targetLangu
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 1500,
+      max_tokens: 4000,
       messages: [{ role: 'user', content: prompt }]
     })
   })
@@ -460,10 +467,10 @@ Chashm-e-Tar Se Karein Hum Tawaf-e-Haram.`
     hi: `हस्बी रब्بی जल्लल्लाह, मा फ़ी क़ल्बी ग़ैरुल्लाह
 नूर-ए-मोहम्मद सल्लल्लाह, ला इलाहा इल्लल्लाह।
 
-वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुدرت बे-इंतहा
+वो है ख़ालिक़-ए-अर्ज़-ओ-समा, उसकी क़ुदरत बे-इंतहा
 मुस्तफ़ा का है प्यारा नाम, सल्लू अलैहि या मोमिनों।
 
-दीन-ए-इस्लाम का है ये पैग़ाम, फैलाओ दुनिया में मोहब्बत का सलाम
+दीन-ए-इस्लाम का ہے ये पैग़ाम, फैलाओ दुनिया में मोहब्बत का सलाम
 हर ज़बान पे जारी रहे ये कलाम, ला इलाहा इल्लल्लाह।`,
     en: `Hasbi Rabbi Jallallah, Ma Fi Qalbi Ghairullah
 Noor-e-Muhammad Sallallah, Laa Ilaha Illallah.
@@ -488,8 +495,8 @@ Har Zaban Pe Jaari Rahe Ye Kalaam, Laa Ilaha Illallah.`
     hi: `ज़मीं ओ ज़माँ तुम्हारे लिए, मकीं ओ मकाँ तुम्हारे लिए
 चुनीं ओ चुनाँ तुम्हारे लिए, बने दो जहाँ तुम्हारे लिए।
 
-ख़लील ओ नजीब ओ मसीह ओ कलीम, सभी हैं तुम्हारे दर के गदा
-शहाँ ओ शहंशाह तुम्हारे लिए, बिछे फ़र्श-ए-नूरी तुम्हारे लिए।
+ख़लील ओ नजीब ओ مसीह ओ कलीम, सभी हैं तुम्हारे दर के गदा
+शहाँ ओ शहنشاہ तुम्हारे लिए, बिछे फ़र्श-ए-नूरी तुम्हारे लिए।
 
 ख़ुदा की रज़ा चाहते हैं दो आलम, ख़ुदा चाहता है रज़ा-ए-मोहम्मद
 अता कीजिए अब मदीने की भीक, खड़े हैं गदागर तुम्हारे लिए।`,
@@ -522,7 +529,7 @@ Ata Keejiye Ab Madine Ki Bheek, Khade Hain Gadagar Tumhaare Liye.`
 बरसता नहीं देख कर अब्र-ए-रहमत
 बदों पर भी बरसा दे बरसाने वाले।
 
-तू ज़िंदा है वल्लाह तू ज़िंदा ہے वल्लाह
+तू ज़िंदा है वल्लाह तू ज़िंदा है वल्लाह
 मेरे चश्म-ए-आलम से छुप जाने वाले।
 
 तेरी रहमतों का सदा है सहारा
